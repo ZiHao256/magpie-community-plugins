@@ -1,91 +1,64 @@
-const cards = document.getElementById("cards");
-const updated = document.getElementById("updated");
-const refresh = document.getElementById("refresh");
-const tokenNumber = new Intl.NumberFormat("zh-CN", { notation: "compact", maximumFractionDigits: 2 });
-const money = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 2 });
-const date = n => n ? new Date(n).toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "未知";
-const time = n => n ? new Date(n).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" }) : "未知";
-
-function element(tag, cls, text) {
-  const node = document.createElement(tag);
-  if (cls) node.className = cls;
-  if (text !== undefined) node.textContent = text;
-  return node;
-}
-
-window.acceptQuotaSnapshot = snapshot => {
-  if (snapshot?.version !== 1 || !Array.isArray(snapshot.cards)) throw new Error("快照格式不支持");
-  const opened = new Set([...cards.querySelectorAll("details[open]")].map(node => node.dataset.account));
-  cards.replaceChildren();
-  const stale = Date.now() - snapshot.generatedAt > 3 * 60000;
-  updated.textContent = stale ? "数据暂未更新" : `更新于 ${time(snapshot.generatedAt)}`;
-  document.getElementById("errors").replaceChildren(...snapshot.errors.map(text => element("p", "notice", text)));
-  const accounts = new Map();
-  for (const card of snapshot.cards) {
-    if (!accounts.has(card.title)) accounts.set(card.title, []);
-    accounts.get(card.title).push(card);
-  }
-  for (const [title, windows] of accounts) {
-    const section = element("section", "account"), heading = element("div", "account-heading");
-    const name = title.includes("Codex") ? "Codex" : title.includes("Claude") ? "Claude Code" : "Remote magpie";
-    const scope = title.startsWith("本机") ? "本机" : title.match(/^Remote magpie \d+/)?.[0] || "远端";
-    heading.append(element("h2", "", name), element("span", "scope", scope));
-    section.append(heading, element("p", "account-id", title.match(/账号 \d+$/)?.[0] || "连接未就绪"));
-    const metrics = element("div", "windows"), basis = element("div", "basis");
-    for (const card of windows) {
-      const window = element("section", "window"), label = card.window === "周" ? "周额度" : card.window;
-      const row = element("div", "window-heading");
-      row.append(element("span", "", label), element("strong", "", card.used === null ? "未上报" : `已用 ${card.used}%`));
-      window.append(row);
-      if (card.used !== null) {
-        const progress = element("progress");
-        progress.max = 100; progress.value = card.used;
-        progress.setAttribute("aria-label", `${name} ${scope} ${label}官方已用 ${card.used}%`);
-        window.append(progress);
-      } else window.append(element("div", "no-window"));
-      const available = card.state === "estimated" && !stale;
-      window.append(element("p", "metric-label", "用满预估"),
-        element("div", `capacity${available ? "" : " unavailable"}`, available ? tokenNumber.format(card.tokens) : "—"));
-      const value = element("div", `value-meta${available ? "" : " unavailable"}`);
-      value.append(element("span", "unit", "Token"), element("span", "", available ? card.cost === null ? "美元待定" : `≈${money.format(card.cost)}` : "· — USD"));
-      window.append(value, element("p", "status", stale ? "数据暂未更新" : available
-        ? `${card.confidence}${card.partial ? " · 可能低估" : ""}` : card.reason));
-      if (card.end) window.append(element("p", "reset", `重置 ${date(card.end)}`));
-      metrics.append(window);
-      basis.append(element("h3", "", label));
-      if (card.calls) basis.append(element("p", "", `已记录 ${tokenNumber.format(card.observedTokens)} Token · ${money.format(card.observedCost)}${card.unpriced ? " + 未定价部分" : ""} · ${card.calls} 次调用`));
-      if (card.nativeCalls) basis.append(element("p", "", `原生 ${card.nativeCalls} 次 · 网关 ${card.calls - card.nativeCalls} 次 · 已去重`));
-      if (card.nativeNote) basis.append(element("p", "", card.nativeNote));
-      basis.append(element("p", "", card.reason));
-      if (card.unpriced) basis.append(element("p", "", `${card.unpriced} 次调用缺少可靠 API 价格，美元满额留空。`));
-      basis.append(element("p", "", `额度采样 ${date(card.readAt)}`));
-    }
-    const details = element("details"), summary = element("summary");
-    details.dataset.account = title; details.open = opened.has(title);
-    const sampled = Math.max(...windows.map(card => card.readAt || 0));
-    summary.append(element("span", "", "估算依据"), element("span", "sample", `额度更新 ${time(sampled)}`));
-    details.append(summary, basis);
-    section.append(metrics, details);
-    cards.append(section);
-  }
-  if (!snapshot.cards.length) cards.append(element("p", "empty", "尚无可读取的账号"));
-  cards.setAttribute("aria-busy", "false");
-};
-
-let loading = false;
-function readSnapshot() {
-  if (loading) return;
-  loading = true; refresh.disabled = true;
-  const script = document.createElement("script");
-  script.src = `snapshot.js?v=${Date.now()}`;
-  script.onload = () => { loading = false; refresh.disabled = false; script.remove(); };
-  script.onerror = () => {
-    loading = false; refresh.disabled = false; script.remove();
-    updated.textContent = "暂时无法读取，请稍后刷新";
-    cards.setAttribute("aria-busy", "false");
+// No data read is requested until Magpie provides a permissioned quota-window read.
+(async () => {
+  const words = {
+    en: {
+      title: "Quota estimates", intro: "Token capacity and API-equivalent USD for a full allowance window",
+      status: "Waiting for a Magpie data read", unavailable: "Quota estimates are not available yet",
+      reason: "Magpie's page bridge currently exposes usage totals and provider names, but not account-specific quota windows or their matching usage. Those totals cannot estimate a 5-hour or weekly allowance.",
+      five: "5-hour allowance", week: "Weekly allowance", capacity: "Full-window estimate",
+      pending: "Awaiting a permissioned quota-window read", details: "Data needed",
+      needed: "Each account needs its quota percentage, reset and sample times, and usage totals for that same window, with coverage and API-price status. Local and Remote data must stay separate. Native Claude usage needs a host-supported import; the page does not read session files.",
+      footer: "Estimates will remain observations, not provider guarantees or subscription bills.",
+      boundary: "Page only · No data reads or background collector",
+    },
+    zh: {
+      title: "额度预估", intro: "预估额度用满对应的 Token 与 API 等值美元",
+      status: "等待 Magpie 数据接口", unavailable: "额度预估暂不可用",
+      reason: "Magpie 页面桥接目前仅提供用量总计和供应商名称，尚未提供按账号划分的额度窗口及其对应用量。这些总计无法用于推算 5 小时或周额度。",
+      five: "5 小时额度", week: "周额度", capacity: "用满预估",
+      pending: "等待带权限声明的额度窗口接口", details: "所需数据",
+      needed: "每个账号需要额度比例、重置时间、采样时间，以及同一窗口内的用量、记录覆盖和 API 价格状态。本机与 Remote 数据须分别归属。Claude 原生用量需要宿主支持导入；页面不读取会话文件。",
+      footer: "预估属于观察值，不是供应商承诺的额度或订阅账单。",
+      boundary: "纯页面 · 不读取数据，不运行后台采集",
+    },
+    "zh-TW": {
+      title: "額度預估", intro: "預估額度用滿對應的 Token 與 API 等值美元",
+      status: "等待 Magpie 資料介面", unavailable: "額度預估暫不可用",
+      reason: "Magpie 頁面橋接目前僅提供用量總計和供應商名稱，尚未提供按帳號劃分的額度視窗及其對應用量。這些總計無法用於推算 5 小時或週額度。",
+      five: "5 小時額度", week: "週額度", capacity: "用滿預估",
+      pending: "等待帶權限宣告的額度視窗介面", details: "所需資料",
+      needed: "每個帳號需要額度比例、重置時間、取樣時間，以及同一視窗內的用量、記錄涵蓋和 API 價格狀態。本機與 Remote 資料須分別歸屬。Claude 原生用量需要宿主支援匯入；頁面不讀取工作階段檔案。",
+      footer: "預估屬於觀察值，不是供應商承諾的額度或訂閱帳單。",
+      boundary: "純頁面 · 不讀取資料，不執行背景收集",
+    },
+    ja: {
+      title: "クォータの推定", intro: "利用枠全体の Token 数と API 料金相当額（米ドル）",
+      status: "Magpie の読み取り API を待っています", unavailable: "クォータはまだ推定できません",
+      reason: "現在のページブリッジが提供するのは使用量の合計とプロバイダー名のみです。アカウント別の利用枠と同じ期間の使用量がないため、5 時間枠や週間枠は推定できません。",
+      five: "5 時間の利用枠", week: "週間の利用枠", capacity: "利用枠全体の推定",
+      pending: "権限を宣言する利用枠 API が必要です", details: "必要なデータ",
+      needed: "アカウントごとの使用率、リセット時刻、取得時刻、同じ期間の使用量、記録の網羅性、API 料金の有無が必要です。ローカルと Remote のデータは区別します。Claude のネイティブ使用量にはホスト側のインポート対応が必要で、ページは会話ファイルを読みません。",
+      footer: "推定は観測値であり、プロバイダーが保証する上限やサブスクリプションの請求額ではありません。",
+      boundary: "ページのみ · データの読み取りやバックグラウンド収集なし",
+    },
+    de: {
+      title: "Kontingentschätzung", intro: "Token-Kapazität und API-Gegenwert in USD für ein volles Kontingent",
+      status: "Warten auf eine Magpie-Leseschnittstelle", unavailable: "Kontingentschätzungen sind noch nicht verfügbar",
+      reason: "Die Seiten-Bridge liefert derzeit nur Nutzungssummen und Anbieternamen. Ohne kontobezogene Kontingentfenster und deren passende Nutzung lässt sich weder das 5-Stunden- noch das Wochenkontingent schätzen.",
+      five: "5-Stunden-Kontingent", week: "Wochenkontingent", capacity: "Schätzung des vollen Kontingents",
+      pending: "Eine Kontingent-Leseschnittstelle mit deklarierter Berechtigung fehlt", details: "Benötigte Daten",
+      needed: "Pro Konto werden Nutzungsanteil, Rücksetz- und Abfragezeit sowie die Nutzung im selben Fenster samt Abdeckung und API-Preisstatus benötigt. Lokale und Remote-Daten müssen getrennt bleiben. Native Claude-Nutzung erfordert einen Import durch Magpie; die Seite liest keine Sitzungsdateien.",
+      footer: "Schätzungen sind Beobachtungen, keine garantierten Anbieterlimits oder Abonnementrechnungen.",
+      boundary: "Nur Seite · Keine Datenabfragen oder Hintergrundsammlung",
+    },
   };
-  document.head.append(script);
-}
-refresh.addEventListener("click", readSnapshot);
-readSnapshot();
-setInterval(readSnapshot, 30000);
+  function paint(theme) {
+    const lang = theme.lang || "en";
+    const t = words[lang] || words[lang.split("-")[0]] || words.en;
+    document.title = t.title;
+    document.querySelectorAll("[data-t]").forEach(node => { node.textContent = t[node.dataset.t]; });
+    document.getElementById("cards").setAttribute("aria-busy", "false");
+  }
+  paint(await magpie.ready);
+  magpie.onTheme(paint);
+})();

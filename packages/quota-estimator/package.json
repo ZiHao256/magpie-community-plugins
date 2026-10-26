@@ -1,7 +1,7 @@
 {
   "name": "@magpie-community/page-quota-estimator",
   "version": "0.1.0",
-  "description": "Read-only quota capacity estimates for local Codex, verified Claude Code native logs, and Remote magpie",
+  "description": "Draft quota estimator page awaiting a permissioned Magpie quota-window read",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -23,9 +23,6 @@
     "cost"
   ],
   "files": [
-    "index.mjs",
-    "collector.mjs",
-    "claude-native.mjs",
     "estimate.mjs",
     "page/index.html",
     "page/app.js",
@@ -37,17 +34,17 @@
     "node": ">=22"
   },
   "type": "module",
-  "main": "index.mjs",
   "scripts": {
-    "test": "node --test test/*.test.mjs",
-    "collect": "node collector.mjs"
+    "test": "node --test test/*.test.mjs"
   },
   "magpie": {
     "page": {
       "title": "Quota estimates",
       "titles": {
         "zh": "\u989d\u5ea6\u9884\u4f30",
-        "zh-TW": "\u984d\u5ea6\u9810\u4f30"
+        "zh-TW": "\u984d\u5ea6\u9810\u4f30",
+        "ja": "クォータの推定",
+        "de": "Kontingentschätzung"
       },
       "file": "page/index.html"
     },
